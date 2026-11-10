@@ -1,16 +1,20 @@
 
 <?php
 
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Auth\PetugasAuthController;
-use App\Http\Controllers\KategoriController;
 use App\Http\Controllers\BukuController;
+use App\Http\Controllers\KategoriController;
 use App\Http\Controllers\PeminjamanController;
+use App\Http\Controllers\Soap\LibrarySoapController;
+use Illuminate\Support\Facades\Route;
 
 // Halaman utama
 Route::get('/', function () {
     return redirect()->route('buku.index');
 });
+
+Route::get('/soap/sipus.wsdl', [LibrarySoapController::class, 'wsdl']);
+Route::post('/soap/sipus', [LibrarySoapController::class, 'handle']);
 
 // Route autentikasi
 Route::middleware('guest')->group(function () {

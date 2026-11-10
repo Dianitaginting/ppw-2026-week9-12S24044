@@ -1,0 +1,383 @@
+openapi: 3.0.3
+info:
+  title: SIPUS-Del REST API
+  version: 1.0.0
+  description: >
+    Kontrak REST API SIPUS-Del Minggu 9. Respons sukses memakai amplop JSON
+    yang konsisten; respons kesalahan memakai RFC 7807 Problem Details.
+servers:
+  - url: http://127.0.0.1:8000/api/v1
+    description: Server pengembangan lokal
+tags:
+  - name: Authentication
+  - name: Books
+  - name: Loans
+  - name: External metadata
+paths:
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login petugas dan membuat bearer token Sanctum
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, example: pustakawan@del.ac.id }
+                password: { type: string, format: password }
+                device_name: { type: string, maxLength: 100, example: postman-client }
+      responses:
+        '200':
+          description: Login berhasil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: Menampilkan profil pemilik token
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Profil petugas aktif
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '401':
+          $ref: '#/components/responses/Problem'
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Mencabut bearer token aktif
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Token berhasil dicabut
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '401':
+          $ref: '#/components/responses/Problem'
+  /bukus:
+    get:
+      tags: [Books]
+      summary: Katalog buku dengan pencarian, filter, sorting, dan pagination
+      security: []
+      parameters:
+        - in: query
+          name: search
+          schema: { type: string }
+          description: Mencari judul, penulis, atau ISBN
+        - in: query
+          name: kategori_id
+          schema: { type: integer }
+        - in: query
+          name: tersedia
+          schema: { type: boolean }
+          description: Jika true, hanya buku dengan stok lebih dari nol
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [isbn, judul, penulis, penerbit, tahun_terbit, stok, created_at]
+        - in: query
+          name: dir
+          schema: { type: string, enum: [asc, desc], default: asc }
+        - in: query
+          name: per_page
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        '200':
+          description: Daftar buku terpaginasikan dengan metadata
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiSuccess'
+        '422':
+          $ref: '#/components/responses/Problem'
+    post:
+      tags: [Books]
+      summary: Membuat buku
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BukuInput'
+      responses:
+        '201':
+          description: Buku dibuat; header Location berisi URI detail
+          headers:
+            Location:
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+  /bukus/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [Books]
+      summary: Detail buku, kategori, dan riwayat peminjaman
+      security: []
+      responses:
+        '200':
+          description: Detail buku
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '404':
+          $ref: '#/components/responses/Problem'
+    put:
+      tags: [Books]
+      summary: Mengganti representasi buku secara penuh
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BukuInput'
+      responses:
+        '200':
+          description: Representasi buku diganti
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+    patch:
+      tags: [Books]
+      summary: Memperbarui satu atau lebih atribut buku
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BukuPatch'
+      responses:
+        '200':
+          description: Atribut buku diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+    delete:
+      tags: [Books]
+      summary: Menghapus buku jika tidak memiliki peminjaman aktif
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Buku dihapus; tidak ada body respons
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /bukus/{id}/referensi-eksternal:
+    get:
+      tags: [External metadata]
+      summary: Mengambil metadata ISBN dari Open Library
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Metadata eksternal ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '502':
+          $ref: '#/components/responses/Problem'
+  /peminjamans:
+    get:
+      tags: [Loans]
+      summary: Daftar transaksi terpaginasikan
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [dipinjam, dikembalikan] }
+        - in: query
+          name: nim
+          schema: { type: string }
+        - in: query
+          name: per_page
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        '200':
+          description: Daftar transaksi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+    post:
+      tags: [Loans]
+      summary: Meminjam buku dengan transaksi database dan row lock
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [buku_id, nim_peminjam, nama_peminjam, durasi_hari]
+              properties:
+                buku_id: { type: integer, example: 1 }
+                nim_peminjam: { type: string, example: '12S24044' }
+                nama_peminjam: { type: string, example: 'Mahasiswa Del' }
+                durasi_hari: { type: integer, minimum: 1, maximum: 365, example: 7 }
+      responses:
+        '201':
+          description: Peminjaman dibuat; stok buku berkurang satu
+          headers:
+            Location:
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+  /peminjamans/{id}/kembalikan:
+    patch:
+      tags: [Loans]
+      summary: Mengembalikan buku dan menambah stok dengan transaksi atomik
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Peminjaman ditandai dikembalikan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum token
+      description: Gunakan data.access_token dari POST /auth/login.
+  responses:
+    Problem:
+      description: RFC 7807 Problem Details
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+  schemas:
+    BukuInput:
+      allOf:
+        - $ref: '#/components/schemas/BukuFields'
+        - type: object
+          required: [isbn, judul, penulis, penerbit, tahun_terbit, kategori_id, stok]
+    BukuPatch:
+      allOf:
+        - $ref: '#/components/schemas/BukuFields'
+      description: Kirim hanya atribut yang ingin diubah; minimal satu atribut wajib disertakan.
+    BukuFields:
+      type: object
+      properties:
+        isbn: { type: string, maxLength: 20, example: '9781234567890' }
+        judul: { type: string, maxLength: 255, example: 'Pemrograman Web' }
+        penulis: { type: string, maxLength: 150 }
+        penerbit: { type: string, maxLength: 150 }
+        tahun_terbit: { type: integer, minimum: 0, maximum: 9999 }
+        kategori_id: { type: integer, example: 1 }
+        stok: { type: integer, minimum: 0, example: 5 }
+        sinopsis: { type: string, nullable: true }
+    ApiSuccess:
+      type: object
+      required: [success, message, data]
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string }
+        data: {}
+        meta:
+          type: object
+          description: Metadata pagination pada koleksi.
+    ProblemDetails:
+      type: object
+      required: [type, title, status, detail, instance]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }

@@ -1,9 +1,19 @@
-# SIPUS-Del — Tugas Mandiri Modul Minggu 6
+# SIPUS-Del — Tugas Mandiri Minggu 6 dan 9
 
 SIPUS-Del adalah aplikasi pengelolaan katalog dan peminjaman buku Perpustakaan
 Kampus Institut Teknologi Del. Repository ini melanjutkan proyek Minggu 5 dan
-difokuskan pada **Tugas Mandiri Mahasiswa (SIPUS-Del tahap 2)**: relasi transaksi,
-stok yang konsisten, pencarian dan statistik katalog, serta autentikasi petugas.
+6. Tahap Minggu 9 menambahkan simulasi SOAP legacy, REST API provider dan
+consumer, autentikasi token stateless, serta kontrak layanan tanpa mengganti
+antarmuka web Blade yang sudah ada.
+
+## Identitas Mahasiswa
+
+| Data | Keterangan |
+| --- | --- |
+| Nama | Dianita Lorensia Br Ginting |
+| NIM | 12S24044 |
+| Kelas | 13SI2 |
+| Program Studi | Sistem Informasi |
 
 ## Kesesuaian dengan Tugas Mandiri dan Rubrik
 
@@ -28,7 +38,7 @@ stok yang konsisten, pencarian dan statistik katalog, serta autentikasi petugas.
 Pastikan branch tugas aktif:
 
 ```powershell
-git switch week6-db-session
+git switch week9-rest-api
 ```
 
 Siapkan aplikasi dari root repository:
@@ -202,3 +212,230 @@ Cookie `last_peminjaman` terlihat memiliki flag `HttpOnly` dan `SameSite=Lax`.
 Nilai cookie pada screenshot disamarkan agar tidak membocorkan token sesi atau
 transaksi. Tes otomatis `PeminjamanServiceTest` juga memverifikasi atribut
 cookie tersebut.
+
+## Minggu 9 — SOAP dan REST API SIPUS-Del
+
+Implementasi Minggu 9 mempertahankan antarmuka Blade dan menambahkan dua
+antarmuka layanan:
+
+- **SOAP Provider:** `GET /soap/sipus.wsdl` menyediakan kontrak WSDL ringkas
+  untuk `CheckClearanceStatus`; `POST /soap/sipus` menerima XML SOAP dan
+  menghitung pinjaman aktif berdasarkan NIM untuk kebutuhan bebas pustaka.
+- **REST Provider:** `/api/v1/bukus` menyediakan katalog, detail, mutasi, dan
+  relasi HATEOAS; endpoint transaksi `/api/v1/peminjamans` memakai kembali
+  `PeminjamanService` dengan transaksi database dan `lockForUpdate()`.
+- **REST Consumer:** detail referensi melalui
+  `GET /api/v1/bukus/{id}/referensi-eksternal` memanggil Open Library dengan
+  batas waktu 8 detik dan merespons 404/502 saat metadata tidak tersedia.
+
+### Analisis kebutuhan dan kelayakan layanan
+
+SIPUS-Del berperan sebagai **Service Provider** untuk katalog, status
+peminjaman, dan pemeriksaan bebas pustaka karena seluruh data tersebut berada
+di domain perpustakaan. SIPUS-Del berperan sebagai **Service Consumer** ketika
+mengambil metadata ISBN dari Open Library; katalog eksternal tidak perlu
+disalin atau dipelihara sendiri.
+
+REST/JSON layak untuk aplikasi Mobile dan Kiosk karena protokol HTTP, URI
+resource, status code, serta payload JSON didukung langsung oleh platform
+mobile; setiap request membawa bearer token sehingga tidak membutuhkan session
+server dan bisa dilayani oleh beberapa instance aplikasi. Operasi katalog
+bersifat baca dan dapat dipaginasi, sedangkan peminjaman/pengembalian tetap
+menjalankan transaksi ACID di provider. SOAP tetap disediakan secara terbatas
+untuk integrasi yudisium legacy yang membutuhkan kontrak WSDL dan XML yang
+stabil. Untuk konsumsi metadata, Open Library dipilih dibanding membangun
+database metadata eksternal sendiri; pemanggilan dibatasi 8 detik dan
+kegagalan upstream dikembalikan eksplisit sebagai 404 atau 502. Dengan lingkup
+ini, manfaat interoperabilitas sepadan dengan biaya implementasi dan
+pemeliharaan; ketersediaan layanan eksternal tetap menjadi dependensi yang
+ditangani sebagai kegagalan terpisah.
+
+| Peran | Sistem yang terlibat | Alasan |
+| --- | --- | --- |
+| Provider REST | SIPUS-Del → aplikasi Mobile/Kiosk | SIPUS-Del menguasai katalog serta proses sirkulasi; API memberikan data dan transaksi tanpa mengirim HTML Blade. |
+| Provider SOAP | SIPUS-Del → sistem Administrasi Yudisium legacy | XML dan kontrak WSDL mendukung kebutuhan integrasi sistem legacy untuk pemeriksaan bebas pustaka. |
+| Consumer REST | SIPUS-Del → Open Library | SIPUS-Del mengambil metadata ISBN yang dikelola layanan eksternal, bukan menggandakan sumber data. |
+
+| Aspek | SOAP untuk bebas pustaka | REST untuk Mobile/Kiosk |
+| --- | --- | --- |
+| Format | XML dengan Envelope dan kontrak WSDL | JSON dengan resource dan HTTP verbs |
+| Integrasi | Cocok untuk sistem yudisium legacy | Lebih ringan dan didukung langsung oleh aplikasi mobile |
+| Identitas | Endpoint simulasi untuk integrasi legacy | Bearer token Sanctum; setiap request membawa token |
+| Respons | XML berisi jumlah pinjaman dan status bebas pustaka | Status HTTP semantik, JSON resource, pagination, dan HATEOAS |
+
+### Katalog endpoint layanan
+
+Semua endpoint REST menggunakan prefix `/api/v1`. Bearer Token berarti header
+`Authorization` berisi token hasil login. Endpoint mutasi dan seluruh endpoint
+peminjaman dilindungi `auth:sanctum`.
+
+| Method | URI | Proteksi | Deskripsi | Status respons utama |
+| --- | --- | --- | --- | --- |
+| GET | `/soap/sipus.wsdl` | Publik | Kontrak WSDL `CheckClearanceStatus` | 200 |
+| POST | `/soap/sipus` | Publik | Menghitung pinjaman aktif berdasarkan NIM | 200; 500 SOAP Fault |
+| POST | `/api/v1/auth/login` | Publik | Memverifikasi akun dan menerbitkan token | 200; 401; 422 |
+| GET | `/api/v1/auth/me` | Bearer Token | Profil pemilik token aktif | 200; 401 |
+| POST | `/api/v1/auth/logout` | Bearer Token | Mencabut token aktif | 200; 401 |
+| GET | `/api/v1/bukus` | Publik | Katalog, pencarian, filter, sorting, dan pagination | 200 |
+| GET | `/api/v1/bukus/{id}` | Publik | Detail buku, kategori, dan riwayat | 200; 404 |
+| POST | `/api/v1/bukus` | Bearer Token | Membuat buku | 201 + `Location`; 401; 422 |
+| PUT | `/api/v1/bukus/{id}` | Bearer Token | Mengganti seluruh representasi buku | 200; 401; 404; 422 |
+| PATCH | `/api/v1/bukus/{id}` | Bearer Token | Mengubah sebagian atribut buku | 200; 400; 401; 404; 422 |
+| DELETE | `/api/v1/bukus/{id}` | Bearer Token | Menghapus buku tanpa pinjaman aktif | 204; 401; 404; 409 |
+| GET | `/api/v1/bukus/{id}/referensi-eksternal` | Publik | Mengambil metadata ISBN dari Open Library | 200; 404; 502 |
+| GET | `/api/v1/peminjamans` | Bearer Token | Riwayat dengan filter status/NIM dan pagination | 200; 401; 422 |
+| POST | `/api/v1/peminjamans` | Bearer Token | Meminjam buku dan mengurangi stok secara atomik | 201 + `Location`; 401; 409; 422 |
+| PATCH | `/api/v1/peminjamans/{id}/kembalikan` | Bearer Token | Mengembalikan buku dan menambah stok secara atomik | 200; 401; 404; 409 |
+
+### Setup dan menjalankan
+
+Versi Laravel mengikuti proyek Minggu 6 yang sudah tersedia di repository
+(Laravel 13); tidak dilakukan downgrade dependensi hanya untuk menyesuaikan
+nomor versi yang disebut pada modul. Perintah ini mempertahankan data lokal:
+
+```powershell
+composer install
+php artisan migrate
+php artisan db:seed
+php artisan serve
+```
+
+Jika ingin menyiapkan database pengembangan dari kondisi kosong, gunakan
+perintah di bawah **hanya setelah memastikan database aman untuk dihapus**:
+
+```powershell
+php artisan migrate:fresh --seed
+```
+
+`php artisan install:api` telah mengaktifkan `routes/api.php`, Sanctum, dan
+tabel token. Akun pengujian lokal dari seeder adalah
+`pustakawan@del.ac.id` / `password123`; jangan gunakan kata sandi contoh pada
+lingkungan produksi. Semua endpoint mutasi dan data transaksi membutuhkan
+header `Authorization: Bearer <access_token>` dari `POST /api/v1/auth/login`.
+
+### Kontrak dan pengujian
+
+- Kontrak layanan: [`docs/openapi-sipus-v1.yaml`](./docs/openapi-sipus-v1.yaml)
+- Koleksi Postman: [`docs/SIPUS-Del-APIv1.postman_collection.json`](./docs/SIPUS-Del-APIv1.postman_collection.json)
+- Jalankan tes otomatis: `php artisan test`
+- Periksa format PHP: `vendor/bin/pint --test`
+
+Untuk Postman, pilih **Import → File**, lalu impor
+`docs/SIPUS-Del-APIv1.postman_collection.json`. Pastikan `app_url` mengarah ke
+server lokal. Jalankan **Login petugas** terlebih dahulu agar variabel token
+terisi, lalu jalankan skenario lain. Gunakan kategori/buku yang memang ada
+setelah seeding; perbarui variabel `kategori_id`, `buku_id`, dan
+`peminjaman_id` sesuai data hasil uji.
+
+Koleksi Postman menyimpan token dalam variabel koleksi lokal yang diisi saat
+login. Jangan mengekspor token nyata atau memasukkannya ke file yang di-commit.
+Permintaan latihan GitHub PATCH memakai variabel `github_token` kosong; isi
+hanya pada environment lokal Postman, lalu revoke token setelah latihan.
+
+### Matriks bukti uji Postman untuk laporan
+
+Simpan screenshot hasil uji nyata ke `docs/screenshots/` dan tambahkan tautannya
+di tabel ini setelah menjalankan aplikasi. Jangan mengarang screenshot atau
+menampilkan bearer token, kredensial, maupun data pribadi.
+
+| Bukti yang diminta | Skenario | Nama berkas yang disarankan |
+| --- | --- | --- |
+| SOAP XML dan Fault | Respons `CheckClearanceStatus` dan XML cacat tersimpan di bawah | `api-soap-clearance.png`, `api-soap-fault.png` |
+| Login Sanctum | `POST /auth/login` berhasil; baris token ditutupi pada screenshot di bawah | `api-login-token-redacted.png` |
+| Katalog terfilter | `GET` berhasil dan metadata pagination tampil; filter tidak menemukan buku | `api-katalog-pagination.png` |
+| Katalog dengan data | `GET` berhasil dan menampilkan buku; contoh buku pada screenshot memiliki stok 0 | `api-katalog-buku.png` |
+| Logout Sanctum | `POST /auth/logout` berhasil mencabut token aktif | `api-logout-revoke.png` |
+| HATEOAS | Katalog menampilkan `_links.pinjam_buku` untuk buku dengan stok 2 | `api-katalog-hateoas.png` |
+| Buku baru | `POST /bukus` berhasil dengan `201 Created` dan header `Location: /api/v1/bukus/43` | `api-buku-created-location.png` |
+| PUT dibanding PATCH | PATCH stok saja dan PUT representasi penuh berhasil; screenshot terpisah | `api-buku-patch.png`, `api-buku-put.png` |
+| Peminjaman berhasil | `POST /peminjamans` menghasilkan `201 Created` dan link pengembalian | `api-peminjaman-201.png` |
+| Konflik peminjaman | Peminjaman duplikat menghasilkan `409 Conflict` | `api-peminjaman-409.png` |
+| Stok habis dan pengembalian | Buku stok 0 ditolak dengan `422`; pengembalian berhasil dengan `200` | `api-peminjaman-422.png`, `api-peminjaman-return.png` |
+| Latihan GitHub REST | GET profil publik berhasil dengan `200 OK`; percobaan awal `403` karena rate limit anonim | `github-api-success.png`, `github-api-rate-limit.png` |
+
+#### Bukti SOAP — CheckClearanceStatus
+
+Request dengan NIM contoh `12S24001` berhasil mengembalikan satu pinjaman
+aktif dan status belum bebas pustaka.
+
+![Postman SOAP CheckClearanceStatus: 200 OK, active_loans 1, is_cleared false](./docs/screenshots/api-soap-clearance.png)
+
+Request dengan XML cacat menghasilkan SOAP Fault seperti yang diharapkan.
+
+![Postman SOAP Fault untuk request XML cacat](./docs/screenshots/api-soap-fault.png)
+
+#### Bukti Login API Sanctum
+
+Login berhasil dengan status 200. Baris yang berisi bearer token ditutupi
+sebelum screenshot dimasukkan agar token tidak tersebar.
+
+![Login API Sanctum berhasil; baris bearer token disensor](./docs/screenshots/api-login-token-redacted.png)
+
+#### Bukti Katalog Terpaginasi
+
+Request katalog dengan filter menghasilkan `200 OK` dan blok `meta` pagination.
+Kombinasi filter pada screenshot pertama menghasilkan nol buku. Setelah filter
+dihapus, katalog menampilkan buku dengan `200 OK`; contoh yang terlihat
+memiliki stok 0 sehingga bukti ini belum menunjukkan link `pinjam_buku`.
+
+![Postman katalog dengan filter dan metadata pagination](./docs/screenshots/api-katalog-pagination.png)
+
+![Postman katalog menampilkan data buku](./docs/screenshots/api-katalog-buku.png)
+
+Katalog dengan stok tersedia menunjukkan link HATEOAS `pinjam_buku`.
+
+![Buku dengan stok tersedia dan link HATEOAS pinjam_buku](./docs/screenshots/api-katalog-hateoas.png)
+
+#### Bukti Pembuatan Buku
+
+Pembuatan buku berhasil dengan status `201 Created` (ID buku pada respons: 43).
+Header respons menunjukkan `Location: http://127.0.0.1:8000/api/v1/bukus/43`.
+
+![Postman membuat buku dengan status 201 Created dan header Location](./docs/screenshots/api-buku-created-location.png)
+
+#### Bukti PATCH dan PUT
+
+PATCH berhasil mengubah stok saja (dari 3 menjadi 8), sedangkan PUT berhasil
+mengirim representasi penuh buku (stok menjadi 5).
+
+![PATCH memperbarui stok buku saja](./docs/screenshots/api-buku-patch.png)
+
+![PUT mengganti representasi penuh buku](./docs/screenshots/api-buku-put.png)
+
+#### Bukti Transaksi Peminjaman
+
+Peminjaman buku berhasil dengan `201 Created` (ID peminjaman 9) dan resource
+menampilkan link `kembalikan_buku`. Percobaan meminjam buku yang sama lagi
+untuk NIM yang sama ditolak dengan `409 Conflict`.
+
+![Peminjaman buku berhasil dengan status 201 Created](./docs/screenshots/api-peminjaman-201.png)
+
+![Peminjaman duplikat ditolak dengan status 409 Conflict](./docs/screenshots/api-peminjaman-409.png)
+
+Pengembalian peminjaman ID 9 berhasil dengan `200 OK`. Request peminjaman
+untuk buku ID 5 yang stoknya habis ditolak dengan `422 Unprocessable Content`.
+Nilai token yang sempat terlihat pada panel Postman ditutupi pada kedua bukti.
+
+![Pengembalian buku berhasil dengan status 200 OK](./docs/screenshots/api-peminjaman-return.png)
+
+![Peminjaman buku dengan stok habis ditolak dengan status 422](./docs/screenshots/api-peminjaman-422.png)
+
+#### Bukti Logout Sanctum
+
+Logout berhasil dengan `200 OK` dan pesan token API berhasil dicabut.
+
+![Postman logout berhasil mencabut token aktif](./docs/screenshots/api-logout-revoke.png)
+
+#### Bukti GitHub REST API
+
+Setelah rate limit anonim ter-reset, request GET profil publik `octocat`
+berhasil dengan `200 OK`. Request ini tidak memakai token.
+
+![Percobaan GET profil publik GitHub terhambat rate limit 403](./docs/screenshots/github-api-rate-limit.png)
+
+![GET profil publik GitHub berhasil dengan status 200 OK](./docs/screenshots/github-api-success.png)
+
+Tes otomatis API tersedia di `tests/Feature/RestApiTest.php`; tes tersebut
+mencakup validasi, status semantik, HATEOAS, pembatalan token, SOAP Fault,
+transaksi sirkulasi, serta Open Library dengan HTTP fake agar tidak bergantung
+pada jaringan.

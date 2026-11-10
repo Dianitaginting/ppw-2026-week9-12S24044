@@ -15,21 +15,18 @@ class PeminjamanService
     public function pinjam(
         int $bukuId,
         string $nimPeminjam,
-        string $namaPeminjam
+        string $namaPeminjam,
+        int $durasiHari = 7
     ): Peminjaman {
         try {
-            return DB::transaction(function () use (
-                $bukuId,
-                $nimPeminjam,
-                $namaPeminjam
-            ) {
+            return DB::transaction(function () use ($bukuId, $nimPeminjam, $namaPeminjam, $durasiHari) {
                 $buku = Buku::where('id', $bukuId)
                     ->lockForUpdate()
                     ->firstOrFail();
 
                 if ($buku->stok <= 0) {
                     throw ValidationException::withMessages([
-                        'buku_id' => 'Stok buku tidak tersedia.',
+                        'buku_id' => 'Stok buku sedang habis.',
                     ]);
                 }
 
@@ -53,7 +50,7 @@ class PeminjamanService
                     'nim_peminjam' => $nimPeminjam,
                     'nama_peminjam' => $namaPeminjam,
                     'tanggal_pinjam' => now()->toDateString(),
-                    'tanggal_jatuh_tempo' => now()->addDays(7)->toDateString(),
+                    'tanggal_jatuh_tempo' => now()->addDays($durasiHari)->toDateString(),
                     'status' => 'dipinjam',
                 ]);
             });
